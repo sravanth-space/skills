@@ -1,9 +1,9 @@
 ---
-name: code-review
-description: Review the changes since a fixed point (commit, branch, tag, or merge-base) along two axes — Standards (does the code follow this repo's documented coding standards?) and Spec (does the code match what the originating issue/PRD asked for?). Runs both reviews in parallel sub-agents and reports them side by side. Use when the user wants to review a branch, a PR, work-in-progress changes, or asks to "review since X".
+name: review
+description: Review the current branch's PR along two axes — Standards (does the code follow this repo's documented coding standards?) and Spec (does the code match what the originating issue/PRD asked for?). Auto-detects the PR via `gh`, runs both reviews in parallel sub-agents, always writes a Mermaid explainer markdown file alongside the review output, and reports the findings. Use when the user wants to review a branch, a PR, work-in-progress changes, or asks to "review since X".
 ---
 
-Two-axis review of the diff between `HEAD` and a fixed point the user supplies:
+Two-axis review of the diff for the current branch's PR:
 
 - **Standards** — does the code conform to this repo's documented coding standards?
 - **Spec** — does the code faithfully implement the originating issue / PRD / spec?
@@ -14,9 +14,13 @@ The issue tracker should have been provided to you — run `/setup-matt-pocock-s
 
 ## Process
 
-### 1. Pin the fixed point
+### 1. Resolve the PR and pin the fixed point
 
-Whatever the user said is the fixed point — a commit SHA, branch name, tag, `main`, `HEAD~5`, etc. If they didn't specify one, ask for it.
+Detect the PR for the current branch first; only fall back to asking.
+
+1. **`gh` first.** Run `gh pr view --json number,title,baseRefName,url,body`. If it returns a PR, the fixed point is its base branch (`origin/<baseRefName>`). Capture the PR number, title, URL, and body — the body is a spec source (step 2) and feeds the explainer (step 4).
+2. **User argument overrides.** If the user explicitly passed a fixed point (commit SHA, branch, tag, `main`, `HEAD~5`, etc.), use that instead.
+3. **Fall back to asking.** If `gh` finds no PR and the user gave nothing, ask for the fixed point.
 
 Capture the diff command once: `git diff <fixed-point>...HEAD` (three-dot, so the comparison is against the merge-base). Also note the list of commits via `git log <fixed-point>..HEAD --oneline`.
 
@@ -26,10 +30,11 @@ Before going further, confirm the fixed point resolves (`git rev-parse <fixed-po
 
 Look for the originating spec, in this order:
 
-1. Issue references in the commit messages (`#123`, `Closes #45`, GitLab `!67`, etc.) — fetch via the workflow in `docs/agents/issue-tracker.md`.
-2. A path the user passed as an argument.
-3. A PRD/spec file under `docs/`, `specs/`, or `.scratch/` matching the branch name or feature.
-4. If nothing is found, ask the user where the spec is. If they say there isn't one, the **Spec** sub-agent will skip and report "no spec available".
+1. The PR body from step 1, plus any issue references it links (`#123`, `Closes #45`, GitLab `!67`, etc.).
+2. Issue references in the commit messages — fetch via the workflow in `docs/agents/issue-tracker.md`.
+3. A path the user passed as an argument.
+4. A PRD/spec file under `docs/`, `specs/`, or `.scratch/` matching the branch name or feature.
+5. If nothing is found, ask the user where the spec is. If they say there isn't one, the **Spec** sub-agent will skip and report "no spec available".
 
 ### 3. Identify the standards sources
 
@@ -55,9 +60,9 @@ Each smell reads *what it is* → *how to fix*; match it against the diff:
 - **Middle Man** — a class or function that mostly just delegates onward. → cut it, call the real target direct.
 - **Refused Bequest** — a subclass or implementer that ignores or overrides most of what it inherits. → drop the inheritance, use composition.
 
-### 4. Spawn both sub-agents in parallel
+### 4. Spawn the sub-agents in parallel
 
-Send a single message with two `Agent` tool calls. Use the `general-purpose` subagent for both.
+Send a single message with three `Agent` tool calls. Use the `general-purpose` subagent for all three.
 
 **Standards sub-agent prompt** — include:
 
@@ -71,13 +76,26 @@ Send a single message with two `Agent` tool calls. Use the `general-purpose` sub
 - The path or fetched contents of the spec.
 - The brief: "Report: (a) requirements the spec asked for that are missing or partial; (b) behaviour in the diff that wasn't asked for (scope creep); (c) requirements that look implemented but where the implementation looks wrong. Quote the spec line for each finding. Under 400 words."
 
-If the spec is missing, skip the Spec sub-agent and note this in the final report.
+If the spec is missing, skip the Spec sub-agent and note this in the final report. The **Explainer** sub-agent always runs.
 
-### 5. Aggregate
+**Explainer sub-agent prompt** — include:
 
-Present the two reports under `## Standards` and `## Spec` headings, verbatim or lightly cleaned. Do **not** merge or rerank findings — the two axes are deliberately separate (see _Why two axes_).
+- The full diff command and commit list, plus the PR number/title/body from step 1.
+- The brief: "Write a markdown explainer of what this change does and why, for a reviewer who hasn't seen the code. Include **at least two Mermaid diagrams** — e.g. a `flowchart` of the new/changed control flow and a `sequenceDiagram` of the key interaction, plus an architecture or ER diagram where it helps. Verify every diagram is valid Mermaid (correct fences ```mermaid, balanced brackets, no reserved-word node ids). Sections: Summary, What changed (per area), Diagrams, Risks/edge cases. Return the full markdown document as your output — it will be saved verbatim."
 
-End with a one-line summary: total findings per axis, and the worst issue _within each axis_ (if any). Don't pick a single winner across axes — that's the reranking the separation exists to prevent.
+### 5. Write the explainer file
+
+Save the Explainer sub-agent's markdown output verbatim to `/Users/sravanth/Documents/GitHub/Obsidian-Notes/Quaisr/PRs/`, named after the PR number only — e.g. `3695.md`. If that file already exists, overwrite it (this is a fresh review of the same PR — replace the stale content, don't create a suffixed copy). If there's no PR number (fixed point came from a user arg or fallback), use the branch name instead. Report the final path in the summary.
+
+### 6. Aggregate
+
+Present the two review reports under `## Standards` and `## Spec` headings, verbatim or lightly cleaned. Do **not** merge or rerank findings — the two axes are deliberately separate (see _Why two axes_).
+
+End with a one-line summary: total findings per axis, the worst issue _within each axis_ (if any), and the path to the Mermaid explainer file. Don't pick a single winner across axes — that's the reranking the separation exists to prevent.
+
+### 7. Append the review to the file
+
+Append the full review to the same `PRs/<number>.md` file written in step 5, after the explainer, under a top-level `# Review` heading. Include the same `## Standards`, `## Spec`, and summary sections you presented in chat, plus a one-line note of the fixed point and diff command so the file is self-contained. This way the file holds both the explainer and the review.
 
 ## Why two axes
 
