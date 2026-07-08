@@ -1,5 +1,5 @@
 ---
-name: review
+name: code-review
 description: Review the current branch's PR along two axes — Standards (does the code follow this repo's documented coding standards?) and Spec (does the code match what the originating issue/PRD asked for?). Auto-detects the PR via `gh`, runs both reviews in parallel sub-agents, always writes a Mermaid explainer markdown file alongside the review output, and reports the findings. Use when the user wants to review a branch, a PR, work-in-progress changes, or asks to "review since X".
 ---
 
